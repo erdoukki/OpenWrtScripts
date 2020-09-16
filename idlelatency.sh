@@ -1,24 +1,18 @@
 #!/bin/sh
 
-# betterspeedtest.sh - Script to simulate http://speedtest.net
-# Start pinging, then initiate a download, let it finish, then start an upload
-# Output the measured transfer rates and the resulting ping latency
-# It's better than 'speedtest.net' because it measures latency *while* measuring the speed.
+# idlelatency.sh - Script to get latency statistics on an idle line
+# This script starts a ping, then collects statistics on the latency
+#   for a designated time period
 
-# Usage: sh betterspeedtest.sh [-4 -6] [ -H netperf-server ] [ -t duration ] [ -p host-to-ping ] [ -i ] [ -n simultaneous-streams ]
+# Usage: sh idlelatency.sh [-4 -6] [ -t duration ] [ -p host-to-ping ] 
 
 # Options: If options are present:
 #
-# -H | --host:   DNS or Address of a netperf server (default - netperf.bufferbloat.net)
-#                Alternate servers are netperf-east (east coast US), netperf-west (California), 
-#                and netperf-eu (Denmark)
 # -4 | -6:       enable ipv4 or ipv6 testing (ipv4 is the default)
 # -t | --time:   Duration for how long each direction's test should run - (default - 60 seconds)
 # -p | --ping:   Host to ping to measure latency (default - gstatic.com)
-# -i | --idle:   Don't send traffic, only measure idle latency
-# -n | --number: Number of simultaneous sessions (default - 5 sessions)
 
-# Copyright (c) 2014-2019 - Rich Brown rich.brown@blueberryhillsoftware.com
+# Copyright (c) 2014-2020 - Rich Brown rich.brown@blueberryhillsoftware.com
 # GPLv2
 
 # Summarize the contents of the ping's output file to show min, avg, median, max, etc.
@@ -123,73 +117,18 @@ start_pings() {
 
 }
 
-# ------------ Measure speed and ping latency for one direction ----------------
-#
-# Call measure_direction() with single parameter - "Download" or "  Upload"
-#   The function gets other info from globals determined from command-line arguments
-
-measure_direction() {
-
-  # Create temp file
-  SPEEDFILE=`mktemp /tmp/netperfUL.XXXXXX` || exit 1
-  DIRECTION=$1
-  
-  # start off the ping process
-  start_pings
-
-  # Start netperf with the proper direction
-  if [ $DIRECTION = "Download" ]; then
-    dir="TCP_MAERTS"
-  else
-    dir="TCP_STREAM"
-  fi
-  
-  # Start $MAXSESSIONS datastreams between netperf client and the netperf server
-  # netperf writes the sole output value (in Mbps) to stdout when completed
-  for i in $( seq $MAXSESSIONS )
-  do
-    netperf $TESTPROTO -H $TESTHOST -t $dir -l $TESTDUR -v 0 -P 0 >> $SPEEDFILE &
-    # echo "Starting PID $! params: $TESTPROTO -H $TESTHOST -t $dir -l $TESTDUR -v 0 -P 0 >> $SPEEDFILE"
-  done
-  
-  # Wait until each of the background netperf processes completes 
-  # echo "Process is $$"
-  # echo `pgrep -P $$ netperf `
-
-  for i in `pgrep -P $$ netperf `   # gets a list of PIDs for child processes named 'netperf'
-  do
-    #echo "Waiting for $i"
-    wait $i
-  done
-
-  # Print TCP Download speed
-  echo ""
-  awk -v dir="$1" '{s+=$1} END {printf " %s: %1.2f Mbps", dir, s}' < $SPEEDFILE 
-
-  # When netperf completes, summarize the ping data
-  summarize_pings $PINGFILE
-
-  rm $SPEEDFILE
-}
-
 # ------- Start of the main routine --------
 
-# Usage: sh betterspeedtest.sh [ -4 -6 ] [ -H netperf-server ] [ -t duration ] [ -p host-to-ping ] [ -i ] [ -n simultaneous-sessions ]
+# Usage: sh idlelatency.sh [ -4 -6 ] [ -t duration ] [ -p host-to-ping ]
 
-# “H” and “host” DNS or IP address of the netperf server host (default: netperf.bufferbloat.net)
+# -4 or -6 to control whether to use IPv4 or IPv6
 # “t” and “time” Time to run the test in each direction (default: 60 seconds)
 # “p” and “ping” Host to ping for latency measurements (default: gstatic.com)
-# "i" and "idle" Don't send up/down traffic - just measure idle link latency
-# "n" and "number" Number of simultaneous upload or download sessions (default: 5 sessions;
-#       5 sessions chosen empirically because total didn't increase much after that number)
 
 # set an initial values for defaults
-TESTHOST="netperf.bufferbloat.net"
 TESTDUR="60"
 PINGHOST="gstatic.com"
-MAXSESSIONS="5"
 TESTPROTO="-4"
-IDLETEST=false
 
 # read the options
 
@@ -198,11 +137,6 @@ while [ $# -gt 0 ]
 do
     case "$1" in
       -4|-6) TESTPROTO=$1 ; shift 1 ;;
-      -H|--host)
-          case "$2" in
-              "") echo "Missing hostname" ; exit 1 ;;
-              *) TESTHOST=$2 ; shift 2 ;;
-          esac ;;
       -t|--time) 
         case "$2" in
           "") echo "Missing duration" ; exit 1 ;;
@@ -213,15 +147,8 @@ do
               "") echo "Missing ping host" ; exit 1 ;;
               *) PINGHOST=$2 ; shift 2 ;;
           esac ;;
-      -n|--number)
-        case "$2" in
-          "") echo "Missing number of simultaneous sessions" ; exit 1 ;;
-          *) MAXSESSIONS=$2 ; shift 2 ;;
-        esac ;;
-      -i|--idle)
-        IDLETEST=true ; shift 1 ;;
       --) shift ; break ;;
-        *) echo "Usage: sh betterspeedtest.sh [-4 -6] [ -H netperf-server ] [ -t duration ] [ -p host-to-ping ] [ -n simultaneous-sessions ] [ --idle ]" ; exit 1 ;;
+        *) echo "Usage: sh idlelatency.sh [-4 -6] [ -t duration ] [ -p host-to-ping ]" ; exit 1 ;;
     esac
 done
 
@@ -238,16 +165,8 @@ DATE=`date "+%Y-%m-%d %H:%M:%S"`
 # Catch a Ctl-C and stop the pinging and the print_dots
 trap kill_pings_and_dots_and_exit HUP INT TERM
 
-if $IDLETEST
-then
-  echo "$DATE Testing idle line while pinging $PINGHOST ($TESTDUR seconds)"
-  start_pings
-  sleep $TESTDUR
-  summarize_pings $PINGFILE
-
-else
-  echo "$DATE Testing against $TESTHOST ($PROTO) with $MAXSESSIONS simultaneous sessions while pinging $PINGHOST ($TESTDUR seconds in each direction)"
-  measure_direction "Download" 
-  measure_direction "  Upload" 
-fi
+echo "$DATE Testing idle line while pinging $PINGHOST ($TESTDUR seconds)"
+start_pings
+sleep $TESTDUR
+summarize_pings $PINGFILE
 
